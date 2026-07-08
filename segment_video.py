@@ -105,7 +105,7 @@ def extract_clip(video_path: str, start: float, end: float, out_path: str):
     cmd = [
         "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", video_path,
         "-t", f"{duration:.3f}",
-        "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac",
         "-loglevel", "error",
         out_path,
     ]

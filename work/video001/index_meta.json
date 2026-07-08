@@ -1,0 +1,130 @@
+[
+  {
+    "segment_id": "video001_seg0000",
+    "video_id": "video001",
+    "start_ts": 0.0,
+    "end_ts": 23.78,
+    "description": "A purple car and a green car are driving on a road. The purple car is driving on the left side of the road while the green car is driving on the right side of the road. The purple car is driving faster than the green car.",
+    "people_count": 0,
+    "objects": [
+      "road",
+      "car",
+      "tree",
+      "sign"
+    ],
+    "actions": [
+      "car driving",
+      "car turning"
+    ],
+    "on_screen_text": "",
+    "setting": "road"
+  },
+  {
+    "segment_id": "video001_seg0001",
+    "video_id": "video001",
+    "start_ts": 19.78,
+    "end_ts": 45.55,
+    "description": "A purple car drives through an intersection, followed by a green car, a red car, and a red truck. The vehicles navigate the intersection, with the red truck turning left and the red car turning right.",
+    "people_count": 0,
+    "objects": [
+      "purple car",
+      "green car",
+      "red car",
+      "red truck",
+      "intersection",
+      "road signs"
+    ],
+    "actions": [
+      "purple car drives through intersection",
+      "green car follows purple car",
+      "red car follows green car",
+      "red truck turns left",
+      "red car turns right"
+    ],
+    "on_screen_text": "0 2 3 4 5 6 7 8",
+    "setting": "urban intersection with road markings and traffic signs"
+  },
+  {
+    "segment_id": "video001_seg0002",
+    "video_id": "video001",
+    "start_ts": 41.55,
+    "end_ts": 67.33,
+    "description": "A yellow school bus drives through an intersection while other vehicles are present.",
+    "people_count": 0,
+    "objects": [
+      "school bus",
+      "cars",
+      "truck",
+      "traffic lights"
+    ],
+    "actions": [
+      "school bus drives through intersection",
+      "vehicles move around intersection"
+    ],
+    "on_screen_text": "9",
+    "setting": "urban intersection with traffic lights and road markings"
+  },
+  {
+    "segment_id": "video001_seg0003",
+    "video_id": "video001",
+    "start_ts": 63.33,
+    "end_ts": 89.1,
+    "description": "Two cars approach a four-way intersection, one from the left and one from the right. The car from the right turns left, while the car from the left turns right, resulting in a collision at the intersection.",
+    "people_count": 0,
+    "objects": [
+      "cars",
+      "intersection",
+      "road markings"
+    ],
+    "actions": [
+      "car approaches intersection",
+      "car turns left",
+      "car turns right",
+      "collision occurs"
+    ],
+    "on_screen_text": "10 11",
+    "setting": "urban intersection with road markings and traffic signs"
+  },
+  {
+    "segment_id": "video001_seg0004",
+    "video_id": "video001",
+    "start_ts": 85.1,
+    "end_ts": 110.88,
+    "description": "Three cars are driving around a roundabout. A purple car enters the roundabout and drives around the other two cars. The purple car then exits the roundabout.",
+    "people_count": 0,
+    "objects": [
+      "cars",
+      "roundabout",
+      "street signs"
+    ],
+    "actions": [
+      "car enters roundabout",
+      "car drives around other cars",
+      "car exits roundabout"
+    ],
+    "on_screen_text": "10 11 12",
+    "setting": "urban intersection with roundabout"
+  },
+  {
+    "segment_id": "video001_seg0005",
+    "video_id": "video001",
+    "start_ts": 106.88,
+    "end_ts": 130.65,
+    "description": "A red car, a yellow car, and a purple car are driving in a roundabout. A fire truck enters the roundabout and stops behind the purple car.",
+    "people_count": 0,
+    "objects": [
+      "red car",
+      "yellow car",
+      "purple car",
+      "fire truck"
+    ],
+    "actions": [
+      "red car enters roundabout",
+      "yellow car enters roundabout",
+      "purple car enters roundabout",
+      "fire truck enters roundabout"
+    ],
+    "on_screen_text": "10 11 12 13",
+    "setting": "urban roundabout with trees and street signs"
+  }
+]
