@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>nemotron — video inspection desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0b0d0c;
+    --panel: #121613;
+    --panel-2: #171c18;
+    --line: #262b27;
+    --text: #e7ece8;
+    --muted: #8a948c;
+    --amber: #ffb020;
+    --amber-dim: #7a5a1c;
+    --green: #5fe0a0;
+    --red: #ff5d5d;
+    --radius: 10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, #10241a22, transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, #1a1a1022, transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:'Inter', sans-serif;
+    min-height:100%;
+  }
+  ::selection{ background:var(--amber-dim); color:#fff; }
+
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:20px 32px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{
+    display:flex; align-items:center; gap:10px;
+    font-family:'Space Grotesk', sans-serif;
+    font-weight:600; font-size:18px; letter-spacing:0.02em;
+  }
+  .brand .dot{
+    width:9px; height:9px; border-radius:50%;
+    background:var(--amber);
+    box-shadow:0 0 8px 1px var(--amber);
+  }
+  .brand small{ color:var(--muted); font-weight:400; font-size:12px; font-family:'IBM Plex Mono', monospace; }
+  .clock{ font-family:'IBM Plex Mono', monospace; color:var(--muted); font-size:12px; }
+
+  main{ max-width:1180px; margin:0 auto; padding:48px 24px 96px; }
+
+  /* ---------- Upload phase ---------- */
+  #uploadView{
+    display:flex; flex-direction:column; align-items:center;
+    padding-top:6vh;
+    text-align:center;
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    color:var(--amber); font-size:12px; letter-spacing:0.14em;
+    text-transform:uppercase; margin-bottom:14px;
+  }
+  h1{
+    font-family:'Space Grotesk', sans-serif;
+    font-size:clamp(28px, 4vw, 42px);
+    font-weight:600; margin:0 0 12px;
+    letter-spacing:-0.01em;
+  }
+  .sub{ color:var(--muted); max-width:520px; margin:0 auto 40px; line-height:1.55; font-size:15px; }
+
+  .dropzone{
+    width:100%; max-width:640px;
+    border:1.5px dashed var(--line);
+    border-radius:var(--radius);
+    background:var(--panel);
+    padding:56px 32px;
+    cursor:pointer;
+    transition:border-color .15s ease, background .15s ease;
+    position:relative;
+  }
+  .dropzone:hover, .dropzone.drag{
+    border-color:var(--amber-dim);
+    background:var(--panel-2);
+  }
+  .reel{
+    width:56px; height:56px; margin:0 auto 20px;
+    border-radius:50%;
+    border:2px solid var(--line);
+    position:relative;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .reel::before{
+    content:'';
+    width:14px; height:14px; border-radius:50%;
+    background:var(--line);
+  }
+  .reel::after{
+    content:'';
+    position:absolute; inset:8px;
+    border-radius:50%;
+    border:1px dashed var(--muted);
+    opacity:.5;
+  }
+  .dropzone .dz-title{ font-weight:600; font-size:15px; margin-bottom:6px; }
+  .dropzone .dz-sub{ color:var(--muted); font-size:13px; font-family:'IBM Plex Mono', monospace; }
+  input[type=file]{ display:none; }
+
+  .err{
+    margin-top:16px; color:var(--red); font-family:'IBM Plex Mono', monospace;
+    font-size:13px; display:none;
+  }
+
+  /* ---------- Processing phase ---------- */
+  #processView{ display:none; max-width:640px; margin:6vh auto 0; text-align:center; }
+  .filename{ font-family:'IBM Plex Mono', monospace; font-size:13px; color:var(--muted); margin-bottom:28px; word-break:break-all; }
+  .stagebar{
+    display:flex; justify-content:space-between;
+    font-family:'IBM Plex Mono', monospace; font-size:11px;
+    text-transform:uppercase; letter-spacing:.08em;
+    color:var(--muted); margin-bottom:10px;
+  }
+  .stagebar .stage.active{ color:var(--amber); }
+  .stagebar .stage.done{ color:var(--green); }
+  .track{
+    height:3px; background:var(--line); border-radius:2px; overflow:hidden; position:relative;
+  }
+  .track .fill{
+    position:absolute; inset:0 auto 0 0; width:0%;
+    background:linear-gradient(90deg, var(--amber-dim), var(--amber));
+    transition:width .6s ease;
+  }
+  .procmsg{ margin-top:22px; font-size:14px; color:var(--text); }
+  .procmsg .segcount{ color:var(--amber); font-family:'IBM Plex Mono', monospace; }
+  .spin{
+    width:20px; height:20px; margin:22px auto 0;
+    border-radius:50%; border:2px solid var(--line); border-top-color:var(--amber);
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  /* ---------- Ready phase ---------- */
+  #readyView{ display:none; }
+  .layout{ display:grid; grid-template-columns: 1.15fr 0.85fr; gap:28px; align-items:start; }
+  @media (max-width:880px){ .layout{ grid-template-columns:1fr; } }
+
+  .panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    overflow:hidden;
+  }
+  .panel-head{
+    padding:14px 18px; border-bottom:1px solid var(--line);
+    font-family:'IBM Plex Mono', monospace; font-size:11px; text-transform:uppercase;
+    letter-spacing:.1em; color:var(--muted);
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .panel-head .status-dot{
+    width:7px;height:7px;border-radius:50%; background:var(--green); box-shadow:0 0 6px 1px var(--green);
+  }
+
+  video{ width:100%; display:block; background:#000; }
+
+  /* filmstrip citation rail */
+  .filmstrip{
+    position:relative;
+    padding:14px 18px 18px;
+    background:repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 14px) top / 100% 6px no-repeat,
+               repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 14px) bottom / 100% 6px no-repeat,
+               var(--panel-2);
+  }
+  .filmstrip .rail{
+    position:relative; height:34px; background:#0d100e; border:1px solid var(--line); border-radius:6px;
+    margin-top:6px;
+  }
+  .filmstrip .rail-label{ font-family:'IBM Plex Mono', monospace; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+  .tick{
+    position:absolute; top:0; bottom:0; width:2px; background:var(--amber);
+    cursor:pointer;
+  }
+  .tick::after{
+    content: attr(data-t);
+    position:absolute; bottom:calc(100% + 4px); left:50%; transform:translateX(-50%);
+    font-family:'IBM Plex Mono', monospace; font-size:10px; color:var(--amber);
+    white-space:nowrap; opacity:0; transition:opacity .1s;
+    pointer-events:none;
+  }
+  .tick:hover::after{ opacity:1; }
+  .playhead{
+    position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--text); opacity:.6;
+  }
+
+  .meta{ padding:14px 18px; font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--muted); border-top:1px solid var(--line); }
+  .meta b{ color:var(--text); font-weight:500; }
+
+  /* chat / Q&A */
+  .qa-scroll{ max-height:420px; overflow-y:auto; padding:16px 18px; display:flex; flex-direction:column; gap:16px; }
+  .qa-empty{ color:var(--muted); font-size:13px; line-height:1.6; }
+  .qa-item .q{
+    font-weight:600; font-size:14px; margin-bottom:6px;
+  }
+  .qa-item .q::before{ content:'› '; color:var(--amber); }
+  .qa-item .a{ font-size:13.5px; line-height:1.6; color:var(--text); }
+  .qa-item .a.pending{ color:var(--muted); font-style:italic; }
+  .cites{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .cite-chip{
+    font-family:'IBM Plex Mono', monospace; font-size:11px;
+    border:1px solid var(--amber-dim); color:var(--amber);
+    padding:3px 8px; border-radius:20px; cursor:pointer;
+    background:rgba(255,176,32,0.06);
+    transition:background .12s;
+  }
+  .cite-chip:hover{ background:rgba(255,176,32,0.16); }
+
+  .ask-row{
+    display:flex; gap:8px; padding:14px 18px; border-top:1px solid var(--line);
+    background:var(--panel-2);
+  }
+  .ask-row input{
+    flex:1; background:#0d100e; border:1px solid var(--line); color:var(--text);
+    border-radius:6px; padding:11px 12px; font-size:14px; font-family:'Inter', sans-serif;
+    outline:none;
+  }
+  .ask-row input:focus{ border-color:var(--amber-dim); }
+  .ask-row button{
+    background:var(--amber); color:#1a1200; border:none; border-radius:6px;
+    padding:0 18px; font-weight:600; font-size:13px; cursor:pointer;
+    font-family:'Space Grotesk', sans-serif;
+  }
+  .ask-row button:disabled{ opacity:.4; cursor:not-allowed; }
+
+  .suggestions{ padding:0 18px 16px; display:flex; flex-wrap:wrap; gap:6px; }
+  .sugg{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--muted);
+    border:1px solid var(--line); padding:4px 9px; border-radius:20px; cursor:pointer;
+  }
+  .sugg:hover{ border-color:var(--amber-dim); color:var(--amber); }
+
+  .newupload{
+    margin-top:22px; text-align:right;
+  }
+  .newupload button{
+    background:none; border:1px solid var(--line); color:var(--muted);
+    font-family:'IBM Plex Mono', monospace; font-size:11px;
+    padding:8px 14px; border-radius:6px; cursor:pointer;
+  }
+  .newupload button:hover{ color:var(--text); border-color:var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="dot"></span>NEMOTRON <small>/ video inspection desk</small></div>
+  <div class="clock" id="clock">--:--:--</div>
+</div>
+
+<main>
+
+  <!-- Upload -->
+  <section id="uploadView">
+    <div class="eyebrow">Stage 01 — Ingest</div>
+    <h1>Load a video, ask it anything.</h1>
+    <p class="sub">Upload a clip and it's segmented, captioned per-scene, and indexed for search.
+      Once it's processed, ask questions in plain language and jump straight to the moment that answers them.</p>
+
+    <div class="dropzone" id="dropzone">
+      <div class="reel"></div>
+      <div class="dz-title">Drop a video here, or click to browse</div>
+      <div class="dz-sub">MP4 · MOV · MKV · WEBM</div>
+      <input type="file" id="fileInput" accept=".mp4,.mov,.m4v,.webm,.mkv,.avi" />
+    </div>
+    <div class="err" id="errMsg"></div>
+  </section>
+
+  <!-- Processing -->
+  <section id="processView">
+    <div class="eyebrow">Stage 02 — Analysis</div>
+    <h1 style="font-size:24px;">Processing footage</h1>
+    <div class="filename" id="procFilename"></div>
+
+    <div class="stagebar">
+      <span class="stage" data-stage="segmenting">Segmenting</span>
+      <span class="stage" data-stage="captioning">Captioning</span>
+      <span class="stage" data-stage="indexing">Indexing</span>
+      <span class="stage" data-stage="ready">Ready</span>
+    </div>
+    <div class="track"><div class="fill" id="procFill"></div></div>
+    <div class="procmsg" id="procMsg">Starting up...</div>
+    <div class="spin" id="procSpin"></div>
+  </section>
+
+  <!-- Ready -->
+  <section id="readyView">
+    <div class="layout">
+      <div class="panel">
+        <div class="panel-head"><span>Playback</span><span class="status-dot"></span></div>
+        <video id="player" controls></video>
+        <div class="filmstrip">
+          <div class="rail-label">Citations</div>
+          <div class="rail" id="rail"></div>
+        </div>
+        <div class="meta" id="meta"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Ask about this video</span></div>
+        <div class="qa-scroll" id="qaScroll">
+          <div class="qa-empty">No questions yet. Try one below, or ask your own — e.g. "is there a forklift?", "how many people appear?", "what does the sign say?"</div>
+        </div>
+        <div class="suggestions">
+          <div class="sugg" data-q="What happens in this video, overall?">summarize</div>
+          <div class="sugg" data-q="How many people appear in total?">count people</div>
+          <div class="sugg" data-q="Is there any on-screen text?">on-screen text</div>
+        </div>
+        <div class="ask-row">
+          <input id="questionInput" type="text" placeholder="Ask a question about the video..." />
+          <button id="askBtn">Ask</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="newupload"><button id="newUploadBtn">↺ Analyze a different video</button></div>
+  </section>
+
+</main>
+
+<script>
+const API = "";
+let videoId = null;
+let pollTimer = null;
+let videoDuration = 0;
+
+// clock
+function tickClock(){
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB');
+}
+tickClock(); setInterval(tickClock, 1000);
+
+const uploadView = document.getElementById('uploadView');
+const processView = document.getElementById('processView');
+const readyView = document.getElementById('readyView');
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const errMsg = document.getElementById('errMsg');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
+
+async function handleFile(file){
+  errMsg.style.display = 'none';
+  const form = new FormData();
+  form.append('file', file);
+
+  try{
+    const res = await fetch(API + '/api/upload', { method:'POST', body: form });
+    if (!res.ok){
+      const t = await res.text();
+      throw new Error(t || res.statusText);
+    }
+    const data = await res.json();
+    videoId = data.video_id;
+
+    document.getElementById('procFilename').textContent = data.filename;
+    uploadView.style.display = 'none';
+    processView.style.display = 'block';
+    startPolling();
+  }catch(err){
+    errMsg.textContent = 'Upload failed: ' + err.message;
+    errMsg.style.display = 'block';
+  }
+}
+
+const STAGE_ORDER = ['queued','segmenting','captioning','indexing','ready'];
+const STAGE_PROGRESS = { queued:5, segmenting:25, captioning:65, indexing:90, ready:100, error:0 };
+
+function updateStageBar(status){
+  const idx = STAGE_ORDER.indexOf(status);
+  document.querySelectorAll('.stagebar .stage').forEach(el => {
+    const s = el.dataset.stage;
+    const sIdx = STAGE_ORDER.indexOf(s);
+    el.classList.remove('active','done');
+    if (sIdx < idx) el.classList.add('done');
+    else if (sIdx === idx) el.classList.add('active');
+  });
+  document.getElementById('procFill').style.width = (STAGE_PROGRESS[status] ?? 0) + '%';
+}
+
+function startPolling(){
+  pollTimer = setInterval(async () => {
+    try{
+      const res = await fetch(API + '/api/status/' + videoId);
+      const data = await res.json();
+      updateStageBar(data.status);
+
+      let msg = data.message || '';
+      if (data.num_segments) {
+        msg += ` <span class="segcount">(${data.num_segments} clips)</span>`;
+      }
+      document.getElementById('procMsg').innerHTML = msg;
+
+      if (data.status === 'ready'){
+        clearInterval(pollTimer);
+        document.getElementById('procSpin').style.display = 'none';
+        enterReadyView(data);
+      } else if (data.status === 'error'){
+        clearInterval(pollTimer);
+        document.getElementById('procSpin').style.display = 'none';
+        document.getElementById('procMsg').innerHTML =
+          '<span style="color:var(--red)">Error: ' + (data.message || 'processing failed') + '</span>';
+      }
+    }catch(err){
+      // transient network hiccup, keep polling
+    }
+  }, 1500);
+}
+
+function enterReadyView(statusData){
+  processView.style.display = 'none';
+  readyView.style.display = 'block';
+
+  const player = document.getElementById('player');
+  player.src = API + '/api/video/' + videoId;
+  player.addEventListener('loadedmetadata', () => {
+    videoDuration = player.duration || 0;
+  });
+  player.addEventListener('timeupdate', updatePlayhead);
+
+  document.getElementById('meta').innerHTML =
+    `<b>${statusData.filename || 'video'}</b> &nbsp;·&nbsp; ${statusData.num_segments} segments indexed`;
+}
+
+function fmtTime(sec){
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec/60), s = sec%60;
+  return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+function updatePlayhead(){
+  let ph = document.getElementById('playhead');
+  if (!videoDuration) return;
+  const rail = document.getElementById('rail');
+  if (!ph){
+    ph = document.createElement('div');
+    ph.className = 'playhead';
+    ph.id = 'playhead';
+    rail.appendChild(ph);
+  }
+  const player = document.getElementById('player');
+  const pct = (player.currentTime / videoDuration) * 100;
+  ph.style.left = pct + '%';
+}
+
+function addTicks(citations){
+  const rail = document.getElementById('rail');
+  if (!videoDuration) return;
+  citations.forEach(c => {
+    const pct = (c.start_ts / videoDuration) * 100;
+    const tick = document.createElement('div');
+    tick.className = 'tick';
+    tick.style.left = pct + '%';
+    tick.dataset.t = fmtTime(c.start_ts) + '–' + fmtTime(c.end_ts);
+    tick.addEventListener('click', () => seekTo(c.start_ts));
+    rail.appendChild(tick);
+  });
+}
+
+function seekTo(t){
+  const player = document.getElementById('player');
+  player.currentTime = t;
+  player.play();
+}
+
+// Q&A
+const qaScroll = document.getElementById('qaScroll');
+const questionInput = document.getElementById('questionInput');
+const askBtn = document.getElementById('askBtn');
+
+async function askQuestion(q){
+  if (!q || !q.trim()) return;
+  const emptyMsg = qaScroll.querySelector('.qa-empty');
+  if (emptyMsg) emptyMsg.remove();
+
+  const item = document.createElement('div');
+  item.className = 'qa-item';
+  item.innerHTML = `<div class="q"></div><div class="a pending">Thinking...</div>`;
+  item.querySelector('.q').textContent = q;
+  qaScroll.appendChild(item);
+  qaScroll.scrollTop = qaScroll.scrollHeight;
+
+  questionInput.value = '';
+  askBtn.disabled = true;
+
+  try{
+    const res = await fetch(API + '/api/ask', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ video_id: videoId, question: q })
+    });
+    if (!res.ok){
+      const t = await res.text();
+      throw new Error(t || res.statusText);
+    }
+    const data = await res.json();
+    const aEl = item.querySelector('.a');
+    aEl.classList.remove('pending');
+    aEl.textContent = data.answer;
+
+    if (data.citations && data.citations.length){
+      const citesEl = document.createElement('div');
+      citesEl.className = 'cites';
+      data.citations.forEach(c => {
+        const chip = document.createElement('span');
+        chip.className = 'cite-chip';
+        chip.textContent = fmtTime(c.start_ts) + '–' + fmtTime(c.end_ts);
+        chip.addEventListener('click', () => seekTo(c.start_ts));
+        citesEl.appendChild(chip);
+      });
+      item.appendChild(citesEl);
+      addTicks(data.citations);
+    }
+  }catch(err){
+    const aEl = item.querySelector('.a');
+    aEl.classList.remove('pending');
+    aEl.style.color = 'var(--red)';
+    aEl.textContent = 'Error: ' + err.message;
+  }finally{
+    askBtn.disabled = false;
+    qaScroll.scrollTop = qaScroll.scrollHeight;
+  }
+}
+
+askBtn.addEventListener('click', () => askQuestion(questionInput.value));
+questionInput.addEventListener('keydown', e => { if (e.key === 'Enter') askQuestion(questionInput.value); });
+document.querySelectorAll('.sugg').forEach(el => {
+  el.addEventListener('click', () => askQuestion(el.dataset.q));
+});
+
+document.getElementById('newUploadBtn').addEventListener('click', () => location.reload());
+</script>
+</body>
+</html>
