@@ -20,7 +20,8 @@ CAPTION_BACKEND = "hosted"  # "local" or "hosted"
 # --- Local vLLM server (only used if CAPTION_BACKEND == "local") ---
 VLLM_BASE_URL = "http://localhost:8000/v1"
 VLLM_API_KEY = "EMPTY"          # vLLM ignores this, OpenAI client just requires a non-empty string
-MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"  # match --served-model-name on your vllm serve command
+MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
+# match --served-model-name on your vllm serve command
 
 # --- Hosted NVIDIA API (only used if CAPTION_BACKEND == "hosted") ---
 # Get a free trial key at https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl
@@ -28,6 +29,10 @@ MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"  # match --served-mode
 HOSTED_BASE_URL = "https://integrate.api.nvidia.com/v1"
 HOSTED_MODEL_NAME = "nvidia/nemotron-nano-12b-v2-vl"
 HOSTED_API_KEY_ENV_VAR = "NVIDIA_API_KEY"
+
+QA_BACKEND = "hosted"  # or "local"
+QA_MODEL_NAME = "meta/llama-3.1-8b-instruct"       # local vLLM served name
+QA_HOSTED_MODEL_NAME = "meta/llama-3.1-8b-instruct"  # e.g. via NVIDIA build API, Groq, Together
 
 # --- Embedding / FAISS retrieval ---
 # Small, fast, well-supported sentence embedding model. Swap for

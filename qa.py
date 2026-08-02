@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from config import TOP_K, TOP_K_WIDE, QA_TEMPERATURE, QA_MAX_TOKENS, CAPTION_BACKEND, MODEL_NAME, HOSTED_MODEL_NAME
+from config import TOP_K, TOP_K_WIDE, QA_TEMPERATURE, QA_MAX_TOKENS, CAPTION_BACKEND, MODEL_NAME, HOSTED_MODEL_NAME, QA_MODEL_NAME, QA_HOSTED_MODEL_NAME, WORK_DIR, QA_BACKEND
 from captioner import build_client
 from embedder import search
 
@@ -99,7 +99,8 @@ def answer_question(video_id: str, work_dir: str, question: str) -> dict:
     ]
 
     client = build_client()
-    model_name = HOSTED_MODEL_NAME if CAPTION_BACKEND == "hosted" else MODEL_NAME
+    model_name = QA_MODEL_NAME if QA_BACKEND == "local" else QA_HOSTED_MODEL_NAME
+    print(f"[QA] using model: {model_name}")
     resp = client.chat.completions.create(
         model=model_name,
         messages=messages,
