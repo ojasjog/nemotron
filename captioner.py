@@ -2,27 +2,26 @@ from dotenv import load_dotenv
 load_dotenv()
 """
 Sends each segment clip to Nemotron Nano 12B v2 VL and asks for a structured
-JSON caption -- not just free text. This matters a lot for retrieval later:
-"how many people" / "is there a forklift" style questions are much more
-reliable against structured fields than against buried prose.
+JSON caption -- not just free text.
 
-Supports two backends (config.CAPTION_BACKEND):
-  "local"  -- your own vLLM server (needs GPU hardware Nemotron VL actually
-              supports: L40S/A100/H100/B200-class -- NOT T4/Colab-free-tier).
-  "hosted" -- NVIDIA's hosted API (build.nvidia.com). All GPU work happens on
-              NVIDIA's infrastructure, so this is the right choice on Colab's
-              T4 or any machine that can't run the model locally.
-              Get a free key at https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl
-              then: import os; os.environ["NVIDIA_API_KEY"] = "nvapi-..."
-
-Local mode sends clips as file:// paths (vLLM reads them off disk directly).
-Hosted mode sends clips as base64 data URIs (a remote API can't read your
-local filesystem).
+What changed from the original:
+- caption_all() now fires requests concurrently (ThreadPoolExecutor) instead
+  of one at a time -- this is the dominant lever for wall-clock time, since
+  each call is a network round-trip + hosted inference wait, and those calls
+  have zero dependency on each other.
+- If config.PRIORITY_WINDOW is set, segments overlapping it are submitted
+  first, so they complete first.
+- Captions are streamed out via an `on_caption` callback as each one
+  completes (not just written to disk at the end), so a caller (pipeline.py)
+  can index them incrementally and flush to disk periodically -- letting a
+  second process run qa.py against partial results while this keeps going.
 """
 import base64
 import json
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -33,7 +32,7 @@ from config import (
     VLLM_BASE_URL, VLLM_API_KEY, MODEL_NAME,
     HOSTED_BASE_URL, HOSTED_MODEL_NAME, HOSTED_API_KEY_ENV_VAR,
     CAPTION_TEMPERATURE, CAPTION_MAX_TOKENS, CAPTION_SYSTEM_PROMPT, CAPTION_RETRIES,
-    CAPTION_FPS,
+    CAPTION_FPS, CAPTION_WORKERS, PRIORITY_WINDOW,
 )
 from segment_video import Segment
 
@@ -50,9 +49,6 @@ CAPTION_PROMPT = """Describe exactly what happens in this video clip. Respond wi
 
 Be literal and specific. Do not guess at things you cannot see. If nothing notable happens, say so plainly in "description" and leave lists empty."""
 
-# NVIDIA-hosted VLM endpoints have historically rejected inline base64 media
-# above roughly this size (larger media needs their separate assets-upload
-# API). Re-encode/downscale your clips if you hit this.
 HOSTED_INLINE_SIZE_WARNING_BYTES = 15 * 1024 * 1024  # ~15MB raw file, generous margin
 
 
@@ -116,10 +112,6 @@ def caption_segment(client: OpenAI, segment: Segment) -> Caption:
     ]
 
     model_name = HOSTED_MODEL_NAME if CAPTION_BACKEND == "hosted" else MODEL_NAME
-
-    # The fps override is a vLLM-specific extra_body field -- reliable when
-    # self-hosting, but not guaranteed to be honored (or even accepted) by
-    # the hosted API, so only send it in local mode.
     extra_body = {"media_io_kwargs": {"video": {"fps": CAPTION_FPS}}} if CAPTION_BACKEND == "local" else None
 
     last_err = None
@@ -127,18 +119,14 @@ def caption_segment(client: OpenAI, segment: Segment) -> Caption:
         try:
             if extra_body:
                 resp = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    temperature=CAPTION_TEMPERATURE,
-                    max_tokens=CAPTION_MAX_TOKENS,
+                    model=model_name, messages=messages,
+                    temperature=CAPTION_TEMPERATURE, max_tokens=CAPTION_MAX_TOKENS,
                     extra_body=extra_body,
                 )
             else:
                 resp = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    temperature=CAPTION_TEMPERATURE,
-                    max_tokens=CAPTION_MAX_TOKENS,
+                    model=model_name, messages=messages,
+                    temperature=CAPTION_TEMPERATURE, max_tokens=CAPTION_MAX_TOKENS,
                 )
         except Exception as e:
             last_err = e
@@ -151,10 +139,8 @@ def caption_segment(client: OpenAI, segment: Segment) -> Caption:
         try:
             data = _extract_json(raw)
             return Caption(
-                segment_id=segment.segment_id,
-                video_id=segment.video_id,
-                start_ts=segment.start_ts,
-                end_ts=segment.end_ts,
+                segment_id=segment.segment_id, video_id=segment.video_id,
+                start_ts=segment.start_ts, end_ts=segment.end_ts,
                 description=data.get("description", ""),
                 people_count=int(data.get("people_count", 0) or 0),
                 objects=data.get("objects", []) or [],
@@ -174,18 +160,57 @@ def caption_segment(client: OpenAI, segment: Segment) -> Caption:
     )
 
 
-def caption_all(segments: list[Segment], work_dir: str) -> list[Caption]:
+def _overlaps_priority(seg: Segment) -> bool:
+    if PRIORITY_WINDOW is None:
+        return False
+    p_start, p_end = PRIORITY_WINDOW
+    return seg.start_ts < p_end and seg.end_ts > p_start
+
+
+def _ordered(segments: list[Segment]) -> list[Segment]:
+    priority = [s for s in segments if _overlaps_priority(s)]
+    rest = [s for s in segments if not _overlaps_priority(s)]
+    return priority + rest
+
+
+def caption_all(segments: list[Segment], work_dir: str, on_caption=None) -> list[Caption]:
+    """
+    on_caption(caption: Caption, index_in_file_order: int) is called from a
+    worker thread the moment each caption completes -- use it to index
+    incrementally (see pipeline.py). If you don't pass it, behavior is the
+    same as before: everything runs, then captions.jsonl is written once at
+    the end, ordered by file position.
+    """
     client = build_client()
-    captions = []
-    for seg in segments:
-        cap = caption_segment(client, seg)
-        captions.append(cap)
-        print(f"  [{seg.segment_id}] {cap.description[:80]}")
+    id_to_pos = {seg.segment_id: i for i, seg in enumerate(segments)}
+    captions: list[Caption] = [None] * len(segments)
+    lock = threading.Lock()
+
+    submit_order = _ordered(segments)
+    if PRIORITY_WINDOW is not None:
+        n_priority = sum(1 for s in submit_order if _overlaps_priority(s))
+        print(f"      priority window {PRIORITY_WINDOW} -> {n_priority} segments captioned first")
 
     out_path = Path(work_dir) / segments[0].video_id / "captions.jsonl"
-    with open(out_path, "w") as f:
-        for c in captions:
-            f.write(json.dumps(asdict(c)) + "\n")
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=CAPTION_WORKERS) as ex:
+        futures = {ex.submit(caption_segment, client, seg): seg for seg in submit_order}
+        for fut in as_completed(futures):
+            seg = futures[fut]
+            cap = fut.result()
+            pos = id_to_pos[seg.segment_id]
+            with lock:
+                captions[pos] = cap
+                done += 1
+                # append-as-you-go so captions.jsonl is always a valid partial
+                # record on disk, not just written once at the very end
+                with open(out_path, "a") as f:
+                    f.write(json.dumps(asdict(cap)) + "\n")
+            print(f"  [{done}/{len(segments)}] [{seg.segment_id}] {cap.description[:80]}")
+            if on_caption is not None:
+                on_caption(cap, pos)
+
     return captions
 
 
@@ -198,4 +223,6 @@ if __name__ == "__main__":
     video_id = sys.argv[1]
     manifest = json.loads((Path(WORK_DIR) / video_id / "segments.json").read_text())
     segments = [Segment(**m) for m in manifest]
+    # truncate captions.jsonl since caption_all now appends, not overwrites
+    (Path(WORK_DIR) / video_id / "captions.jsonl").write_text("")
     caption_all(segments, WORK_DIR)

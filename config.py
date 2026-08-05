@@ -2,6 +2,32 @@
 Central configuration for the video segmentation + captioning stage.
 Tune these once you see how your videos behave.
 """
+"""
+Append these to your existing config.py. Nothing above is changed --
+these are new knobs only used by the concurrent pipeline additions.
+"""
+
+# --- Concurrency ---
+# Clip extraction is local ffmpeg work -- bound by CPU cores, not network.
+# Rule of thumb: (cpu_count - 1), capped somewhere reasonable.
+EXTRACT_WORKERS = 4
+
+# Captioning is bound by the hosted API's rate limit, not your CPU.
+# Start conservative and raise it until you see 429s, then back off.
+CAPTION_WORKERS = 8
+
+# --- Priority window ---
+# If set, segments overlapping this (start_sec, end_sec) window are
+# extracted + captioned + indexed FIRST, so you can start querying the
+# actually-relevant footage before the rest of the file finishes.
+# Leave as None to process in file order (oldest behavior).
+PRIORITY_WINDOW = None  # e.g. (2400.0, 4200.0) for a window from 40:00-70:00
+
+# --- Incremental indexing ---
+# Flush the FAISS index to disk every N newly-captioned segments, so a
+# second process (e.g. `python qa.py <video_id> "..."`) can query against
+# partial results while captioning continues in the background.
+INDEX_FLUSH_EVERY = 5
 
 # --- Segmentation ---
 MIN_SEGMENT_SEC = 6          # merge scenes shorter than this into neighbors

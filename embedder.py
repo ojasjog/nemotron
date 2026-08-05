@@ -1,12 +1,13 @@
 """
 Embeds each segment's caption into a vector and builds a FAISS index for the
-video. This is what makes "when does X happen" style questions fast to
-answer -- instead of re-reading every caption at query time, we do a
-nearest-neighbor search over embeddings.
+video.
 
-Each video gets its own isolated index (work/<video_id>/index.faiss +
-work/<video_id>/index_meta.json), matching the "each upload is its own
-index" requirement -- nothing here is shared across videos.
+What's new: an incremental path (IncrementalIndex) that lets pipeline.py add
+one caption at a time as captioning completes, and flush to disk
+periodically -- so a second process can run qa.py against a partial index
+while the rest of the file is still being captioned. build_index() (the
+original one-shot batch version) is kept as-is for backward compatibility /
+standalone use (`python embedder.py <video_id>`).
 """
 import json
 from pathlib import Path
@@ -17,7 +18,7 @@ from sentence_transformers import SentenceTransformer
 
 from config import EMBEDDING_MODEL_NAME
 
-_model = None  # lazy-loaded singleton so repeated calls in one process don't reload the model
+_model = None
 
 
 def get_embedder() -> SentenceTransformer:
@@ -28,9 +29,6 @@ def get_embedder() -> SentenceTransformer:
 
 
 def caption_to_embedding_text(caption: dict) -> str:
-    """Flattens a caption's structured fields into one string for embedding.
-    Keeping this consistent between indexing and query time matters -- if you
-    change this, rebuild existing indexes."""
     parts = [caption.get("description", "")]
     if caption.get("objects"):
         parts.append("Objects: " + ", ".join(caption["objects"]))
@@ -44,6 +42,7 @@ def caption_to_embedding_text(caption: dict) -> str:
 
 
 def build_index(video_id: str, work_dir: str):
+    """Original one-shot batch build -- reads all captions, embeds, indexes."""
     captions_path = Path(work_dir) / video_id / "captions.jsonl"
     captions = [json.loads(line) for line in captions_path.read_text().splitlines() if line.strip()]
     if not captions:
@@ -54,17 +53,45 @@ def build_index(video_id: str, work_dir: str):
     vectors = embedder.encode(texts, normalize_embeddings=True, show_progress_bar=False)
     vectors = np.asarray(vectors, dtype="float32")
 
-    index = faiss.IndexFlatIP(vectors.shape[1])  # inner product on normalized vectors == cosine similarity
+    index = faiss.IndexFlatIP(vectors.shape[1])
     index.add(vectors)
 
     index_dir = Path(work_dir) / video_id
     faiss.write_index(index, str(index_dir / "index.faiss"))
-    # captions themselves double as the metadata store; order must match the
-    # index exactly (position i in FAISS <-> captions[i])
     (index_dir / "index_meta.json").write_text(json.dumps(captions, indent=2))
 
     print(f"Indexed {len(captions)} segments for {video_id} -> {index_dir / 'index.faiss'}")
     return index, captions
+
+
+class IncrementalIndex:
+    """Add captions one at a time; flush() writes a valid, loadable
+    index.faiss + index_meta.json at any point -- qa.py doesn't need to know
+    or care whether the index is "done"."""
+
+    def __init__(self, video_id: str, work_dir: str):
+        self.video_id = video_id
+        self.work_dir = work_dir
+        self.embedder = get_embedder()
+        self.index = None  # created lazily once we know the embedding dim
+        self.captions: list[dict] = []
+
+    def add(self, caption: dict):
+        text = caption_to_embedding_text(caption)
+        vec = self.embedder.encode([text], normalize_embeddings=True)
+        vec = np.asarray(vec, dtype="float32")
+        if self.index is None:
+            self.index = faiss.IndexFlatIP(vec.shape[1])
+        self.index.add(vec)
+        self.captions.append(caption)
+
+    def flush(self):
+        if self.index is None:
+            return  # nothing added yet
+        index_dir = Path(self.work_dir) / self.video_id
+        index_dir.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(self.index, str(index_dir / "index.faiss"))
+        (index_dir / "index_meta.json").write_text(json.dumps(self.captions, indent=2))
 
 
 def load_index(video_id: str, work_dir: str):
@@ -75,8 +102,6 @@ def load_index(video_id: str, work_dir: str):
 
 
 def search(video_id: str, work_dir: str, query: str, k: int) -> list[dict]:
-    """Returns the top-k caption dicts most semantically similar to the query,
-    each annotated with a similarity score."""
     index, captions = load_index(video_id, work_dir)
     embedder = get_embedder()
     q_vec = embedder.encode([query], normalize_embeddings=True)

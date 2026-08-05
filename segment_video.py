@@ -1,26 +1,24 @@
 """
 Segments a video into short clips for captioning.
 
-Approach:
-1. Use ffmpeg's built-in scene-detection filter to find cut points (no extra
-   heavyweight deps like PySceneDetect needed -- ffmpeg is already required
-   for clip extraction, so we reuse it).
-2. Merge/split cuts so every segment falls within [MIN_SEGMENT_SEC, MAX_SEGMENT_SEC].
-3. Add a small overlap between consecutive segments so actions spanning a
-   cut boundary aren't lost.
-4. Extract each segment as its own mp4 clip (re-encoded, not stream-copied,
-   so cut points land exactly where we ask -- stream copy snaps to keyframes
-   and can be off by seconds).
-
-Output: list[Segment] with start/end timestamps + path to the clip file.
+Same scene-detection + bounds logic as before. What changed:
+- extract_clip() calls now run concurrently (ThreadPoolExecutor) instead of
+  one ffmpeg subprocess at a time -- extraction is pure local CPU/disk work
+  with zero dependency between clips, so this is a straightforward win.
+- If config.PRIORITY_WINDOW is set, segments overlapping that window are
+  submitted to the pool FIRST, so they tend to land on disk earliest.
 """
 import json
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from config import MIN_SEGMENT_SEC, MAX_SEGMENT_SEC, OVERLAP_SEC, SCENE_DETECT_THRESHOLD
+from config import (
+    MIN_SEGMENT_SEC, MAX_SEGMENT_SEC, OVERLAP_SEC, SCENE_DETECT_THRESHOLD,
+    EXTRACT_WORKERS, PRIORITY_WINDOW,
+)
 
 
 @dataclass
@@ -43,8 +41,6 @@ def get_duration_sec(video_path: str) -> float:
 
 def detect_scene_cuts(video_path: str, threshold: float = SCENE_DETECT_THRESHOLD) -> list[float]:
     """Returns sorted list of timestamps (sec) where a scene change is detected."""
-    # ffmpeg scene filter reports a score 0-100 per frame; we threshold it via
-    # select and read the pts_time back out of showinfo's stderr log.
     scene_val = threshold / 100.0
     cmd = [
         "ffmpeg", "-i", video_path,
@@ -65,16 +61,14 @@ def build_segment_bounds(duration: float, cuts: list[float]) -> list[tuple[float
     boundaries = [0.0] + cuts + [duration]
     boundaries = sorted(set(boundaries))
 
-    # First pass: merge boundaries that create too-short segments
     merged = [boundaries[0]]
     for b in boundaries[1:]:
         if b - merged[-1] < MIN_SEGMENT_SEC:
-            continue  # skip this boundary, extends current segment
+            continue
         merged.append(b)
     if merged[-1] != duration:
-        merged[-1] = duration  # ensure we end exactly at video end
+        merged[-1] = duration
 
-    # Second pass: split any segment that's too long
     final_bounds = []
     for start, end in zip(merged[:-1], merged[1:]):
         length = end - start
@@ -112,6 +106,22 @@ def extract_clip(video_path: str, start: float, end: float, out_path: str):
     subprocess.run(cmd, check=True)
 
 
+def _overlaps_priority(start: float, end: float) -> bool:
+    if PRIORITY_WINDOW is None:
+        return False
+    p_start, p_end = PRIORITY_WINDOW
+    return start < p_end and end > p_start
+
+
+def _ordered_indices(bounds: list[tuple[float, float]]) -> list[int]:
+    """Priority-window segments first (in time order), then everything else
+    (in time order). Submission order to the thread pool, not a guarantee of
+    completion order, but with enough workers it strongly biases early."""
+    priority = [i for i, (s, e) in enumerate(bounds) if _overlaps_priority(s, e)]
+    rest = [i for i, (s, e) in enumerate(bounds) if not _overlaps_priority(s, e)]
+    return priority + rest
+
+
 def segment_video(video_path: str, video_id: str, work_dir: str) -> list[Segment]:
     clips_dir = Path(work_dir) / video_id / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
@@ -121,12 +131,30 @@ def segment_video(video_path: str, video_id: str, work_dir: str) -> list[Segment
     bounds = build_segment_bounds(duration, cuts)
     bounds = apply_overlap(bounds, duration)
 
-    segments = []
+    # Pre-build Segment objects (order preserved = file order, needed later
+    # for the manifest / index ordering), but extract concurrently.
+    segments: list[Segment] = [None] * len(bounds)
     for i, (start, end) in enumerate(bounds):
         seg_id = f"{video_id}_seg{i:04d}"
         clip_path = str(clips_dir / f"{seg_id}.mp4")
-        extract_clip(video_path, start, end, clip_path)
-        segments.append(Segment(seg_id, video_id, round(start, 2), round(end, 2), clip_path))
+        segments[i] = Segment(seg_id, video_id, round(start, 2), round(end, 2), clip_path)
+
+    order = _ordered_indices(bounds)
+    if PRIORITY_WINDOW is not None:
+        n_priority = sum(1 for i in order if _overlaps_priority(*bounds[i]))
+        print(f"      priority window {PRIORITY_WINDOW} -> {n_priority} segments extracted first")
+
+    with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as ex:
+        futures = {
+            ex.submit(extract_clip, video_path, bounds[i][0], bounds[i][1], segments[i].clip_path): i
+            for i in order
+        }
+        done = 0
+        for fut in as_completed(futures):
+            fut.result()  # raises if ffmpeg failed for this clip
+            done += 1
+            if done % 10 == 0 or done == len(futures):
+                print(f"      extracted {done}/{len(futures)} clips")
 
     manifest_path = Path(work_dir) / video_id / "segments.json"
     manifest_path.write_text(json.dumps([asdict(s) for s in segments], indent=2))

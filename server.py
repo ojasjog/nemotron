@@ -13,9 +13,22 @@ Workflow exposed to the browser:
                                seeking to cited timestamps)
   4. POST /api/ask         -- ask a question about a processed video
 
+What changed from the original:
+  - _run_pipeline now uses captioner.caption_all()'s on_caption callback and
+    embedder.IncrementalIndex, instead of waiting for every segment to
+    finish before calling build_index() once. The index is flushed to disk
+    every config.INDEX_FLUSH_EVERY captions.
+  - If config.PRIORITY_WINDOW is set, status moves through an extra
+    "partially_ready" state the moment that window is fully captioned +
+    indexed -- well before the rest of the file finishes.
+  - /api/ask now accepts requests once status is "partially_ready" OR
+    "ready", not just "ready". Answers may simply reflect fewer segments
+    early on; num_segments_indexed in the status response tells you how
+    many are searchable right now.
+
 Run with:
     pip install fastapi "uvicorn[standard]" python-multipart
-    uvicorn server:app --reload --port 8080
+    PYTHONUNBUFFERED=1 uvicorn server:app --reload --port 8080
 
 Then open http://localhost:8080
 """
@@ -37,10 +50,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from config import WORK_DIR
+from config import WORK_DIR, PRIORITY_WINDOW, INDEX_FLUSH_EVERY
 from segment_video import segment_video
 from captioner import caption_all
-from embedder import build_index
+from embedder import IncrementalIndex
 from qa import answer_question
 
 # --------------------------------------------------------------------------
@@ -67,6 +80,8 @@ app.add_middleware(
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 
+READY_STATUSES = {"partially_ready", "ready"}
+
 
 def _set_job(video_id: str, **kwargs: Any) -> None:
     with JOBS_LOCK:
@@ -88,7 +103,7 @@ def _run_pipeline(video_path: str, video_id: str) -> None:
     try:
         _set_job(video_id, status="segmenting", message="Detecting scene cuts and slicing clips...")
         segments = segment_video(video_path, video_id, WORK_DIR)
-        _set_job(video_id, num_segments=len(segments))
+        _set_job(video_id, num_segments=len(segments), num_segments_indexed=0)
 
         if not segments:
             _set_job(video_id, status="error", message="No segments were produced from this video.")
@@ -99,14 +114,52 @@ def _run_pipeline(video_path: str, video_id: str) -> None:
             status="captioning",
             message=f"Captioning {len(segments)} clips with Nemotron VL...",
         )
-        caption_all(segments, WORK_DIR)
 
-        _set_job(video_id, status="indexing", message="Building the search index...")
-        build_index(video_id, WORK_DIR)
+        # (truncate captions.jsonl since caption_all() appends per-completion)
+        (Path(WORK_DIR) / video_id / "captions.jsonl").write_text("")
 
+        idx = IncrementalIndex(video_id, WORK_DIR)
+        since_flush = 0
+        priority_seg_ids: set[str] = set()
+        priority_announced = PRIORITY_WINDOW is None
+        if PRIORITY_WINDOW is not None:
+            p_start, p_end = PRIORITY_WINDOW
+            priority_seg_ids = {
+                s.segment_id for s in segments if s.start_ts < p_end and s.end_ts > p_start
+            }
+
+        def on_caption(cap, _pos_in_file_order):
+            nonlocal since_flush, priority_announced
+            idx.add(cap.__dict__)
+            since_flush += 1
+            done = len(idx.captions)
+            if since_flush >= INDEX_FLUSH_EVERY:
+                idx.flush()
+                since_flush = 0
+            _set_job(video_id, num_segments_indexed=done)
+
+            if not priority_announced:
+                priority_seg_ids.discard(cap.segment_id)
+                if not priority_seg_ids:
+                    idx.flush()
+                    since_flush = 0
+                    priority_announced = True
+                    _set_job(
+                        video_id,
+                        status="partially_ready",
+                        message=(
+                            f"Priority window ready ({done}/{len(segments)} clips indexed) -- "
+                            f"you can start asking questions now. Remaining clips still processing."
+                        ),
+                    )
+
+        caption_all(segments, WORK_DIR, on_caption=on_caption)
+
+        idx.flush()  # final flush, guaranteed complete
         _set_job(
             video_id,
             status="ready",
+            num_segments_indexed=len(idx.captions),
             message=f"Ready. Processed {len(segments)} clips in {time.time() - t0:.0f}s.",
         )
     except Exception as exc:  # noqa: BLE001
@@ -148,6 +201,7 @@ async def upload_video(file: UploadFile = File(...)) -> dict[str, Any]:
         filename=file.filename,
         video_path=str(dest),
         num_segments=0,
+        num_segments_indexed=0,
     )
 
     thread = threading.Thread(target=_run_pipeline, args=(str(dest), video_id), daemon=True)
@@ -166,6 +220,7 @@ async def get_status(video_id: str) -> dict[str, Any]:
         "status": job.get("status"),
         "message": job.get("message"),
         "num_segments": job.get("num_segments", 0),
+        "num_segments_indexed": job.get("num_segments_indexed", 0),
         "filename": job.get("filename"),
     }
 
@@ -183,12 +238,17 @@ async def ask(req: AskRequest) -> dict[str, Any]:
     job = _get_job(req.video_id)
     if job is None:
         raise HTTPException(404, "Unknown video_id")
-    if job.get("status") != "ready":
-        raise HTTPException(409, f"Video isn't ready yet (status: {job.get('status')}).")
+    status = job.get("status")
+    if status not in READY_STATUSES:
+        raise HTTPException(409, f"Video isn't ready yet (status: {status}).")
     if not req.question.strip():
         raise HTTPException(400, "Question can't be empty.")
 
     result = answer_question(req.video_id, WORK_DIR, req.question.strip())
+    if status == "partially_ready":
+        result["partial"] = True
+        result["num_segments_indexed"] = job.get("num_segments_indexed", 0)
+        result["num_segments_total"] = job.get("num_segments", 0)
     return result
 
 
