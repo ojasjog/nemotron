@@ -53,12 +53,12 @@ MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
 # Get a free trial key at https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl
 # then: import os; os.environ["NVIDIA_API_KEY"] = "nvapi-..."  (in Colab, use a secret/cell, don't hardcode it)
 HOSTED_BASE_URL = "https://integrate.api.nvidia.com/v1"
-HOSTED_MODEL_NAME = "nvidia/nemotron-nano-12b-v2-vl"
+HOSTED_MODEL_NAME = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 HOSTED_API_KEY_ENV_VAR = "NVIDIA_API_KEY"
 
 QA_BACKEND = "hosted"  # or "local"
-QA_MODEL_NAME = "meta/llama-3.1-8b-instruct"       # local vLLM served name
-QA_HOSTED_MODEL_NAME = "meta/llama-3.1-8b-instruct"  # e.g. via NVIDIA build API, Groq, Together
+QA_MODEL_NAME = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"       # local vLLM served name
+QA_HOSTED_MODEL_NAME = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"  # e.g. via NVIDIA build API, Groq, Together
 
 # --- Embedding / FAISS retrieval ---
 # Small, fast, well-supported sentence embedding model. Swap for
